@@ -190,6 +190,14 @@ void led_blink(int delay_time_on, int delay_time_off, int times){
   }
 }
 
+void turn_on_led() {
+  digitalWrite(ledPin, HIGH);
+}
+
+void turn_off_led() {
+  digitalWrite(ledPin, LOW);
+}
+
 ///////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////
 
@@ -274,6 +282,8 @@ void loop() {
   connectSample();
 
   while (true){
+    turn_on_led();
+    
     look_for_new_clients();
     
     control = 0;
@@ -300,6 +310,6 @@ void loop() {
       break;
     }
   }
-
+  turn_off_led();
   card_removed();
 }
