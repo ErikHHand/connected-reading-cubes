@@ -2,7 +2,8 @@
 #include <MFRC522.h>
 #include <WiFiNINA.h>
 #include <ArduinoHttpClient.h>
-#include <Arduino_JSON.h>
+#include <ArduinoJson.h>
+#include <FastLED.h>
 
 
 /**************************
@@ -12,6 +13,15 @@
 #define RST_PIN         4         // White wire
 #define SS_PIN          5         // Green cable, as every digital-signal wire
 #define LED_PIN         10        // Red cable, it is a digital pin but it is also power for the led, so: red.
+
+#define RGB_PIN     8
+#define NUM_LEDS    18
+CRGB leds[NUM_LEDS];
+
+#define BRIGHTNESS_OWN_BOOKMARK    10
+#define BRIGHTNESS_OTHER_BOOKMARK    100
+#define BRIGHTNESS_BLINK_OWN_BOOKMARK    127
+#define BRIGHTNESS_BLINK_OTHER_BOOKMARK    200
 
 
 const int ledPin =  LED_PIN;// the number of the LED pin
@@ -25,7 +35,13 @@ MFRC522::Uid id2;
 String cardBlue = "0x17 0x2f 0x5b 0x52 ";
 String cardRed = "0x67 0x29 0x62 0x52 ";
 
-bool is_card_present = false;
+bool ownBookmarkPlaced = false;
+bool otherBookmarkPlaced = false;
+CRGB ownBookmarkColor;
+CRGB otherBookmarkColor;
+
+DynamicJsonDocument response(1024);
+
 uint8_t control = 0x00;
 
 String stringHex(uint8_t *data, uint8_t lenght){
@@ -53,13 +69,12 @@ void card_detected(MFRC522::Uid id) {
   Serial.print("New card: ");
   printHex(id.uidByte, id.size);
   Serial.println("");
-  
-  digitalWrite(ledPin, HIGH);
+  ownBookmarkPlaced = true;
 }
 
 void card_removed() {
   Serial.println("Card Removed.");
-  digitalWrite(ledPin, LOW);
+  ownBookmarkPlaced = false;
   delay(1000);
 
   mfrc522.PICC_HaltA();
@@ -122,7 +137,6 @@ void look_for_new_clients() {
       if (client.available()) {
 
         // Here we read all the http request, char by char.
-        // TODO: Figure out a method for reading properly the request so that we can parse the parameters
         int c = client.read();
         Serial.write(c);
         
@@ -130,12 +144,25 @@ void look_for_new_clients() {
         // character) and the line is blank, the http request has ended,
         // so you can send a reply
         if (c == '\n' && currentLineIsBlank) {
-          while(client.available()) { 
-            Serial.write(client.read()); // Read HTTP Post data
+          String msg;
+          while(client.available()) {
+            c = client.read();
+            Serial.write(c);
+            msg = String(msg + (char) c);
           }
-          Serial.println();
+          deserializeJson(response, msg);
+          JsonObject JSONmsg = response.as<JsonObject>();
+          
+          if (JSONmsg["bookmark"] == "on") {
+            otherBookmarkPlaced = true;
+            RGBOtherBookmarkPlaced(JSONmsg["color"]);
+          } else if(JSONmsg["bookmark"] == "off") {
+            otherBookmarkPlaced = false;
+            RGBOtherBookmarkRemoved();
+          }
+  
           send_standard_reply(client);
-          led_blink(800, 200, 4);
+          led_blink(800, 200, 2);
           break;
         }
         if (c == '\n') {
@@ -180,7 +207,7 @@ void send_standard_reply(WiFiClient client){
 
 void on_wifi_connected() {
   printWifiStatus();
-  led_blink(1000, 500, 3);
+  //led_blink(1000, 500, 3);
 }
 
 void connectSample(){
@@ -197,9 +224,6 @@ void connectSample(){
 }
 
 void sendBookmarkOn(MFRC522::Uid id){
-  led_blink(500,500, 2);
-  Serial.println("making POST request");
-  String contentType = "application/json";
   String postData;
 
   if (stringHex(id.uidByte, id.size) == cardBlue) {
@@ -207,6 +231,25 @@ void sendBookmarkOn(MFRC522::Uid id){
   } else if (stringHex(id.uidByte, id.size) == cardRed) {
     postData = "{\"bookmark\":\"on\",\"color\":\"red\"}";
   }
+
+  makePOSTRequest(postData);
+}
+
+void sendBookmarkOff(MFRC522::Uid id){
+  String postData;
+
+  if (stringHex(id.uidByte, id.size) == cardBlue) {
+    postData = "{\"bookmark\":\"off\",\"color\":\"blue\"}";
+  } else if (stringHex(id.uidByte, id.size) == cardRed) {
+    postData = "{\"bookmark\":\"off\",\"color\":\"red\"}";
+  }
+
+  makePOSTRequest(postData);
+}
+
+void makePOSTRequest(String postData) {
+  Serial.println("making POST request");
+  String contentType = "application/json";
 
   int statusCode;
   String response;
@@ -225,9 +268,103 @@ void sendBookmarkOn(MFRC522::Uid id){
   Serial.println(statusCode);
   Serial.print("Response: ");
   Serial.println(response);
-  led_blink(1000,100, 2);
 }
 
+/*********************
+ *  RGB Behavior  *
+ *********************/
+
+void RGBOwnBookmarkPlaced(MFRC522::Uid id) {
+
+  CRGB color;
+  if (stringHex(id.uidByte, id.size) == cardBlue) {
+    color = CRGB::Blue;
+  } else if (stringHex(id.uidByte, id.size) == cardRed) {
+    color = CRGB::Red;
+  }
+  ownBookmarkColor = color;
+  
+  for (int j = 0; j <= 3; j++) {
+    FastLED.showColor(color, BRIGHTNESS_BLINK_OWN_BOOKMARK);
+    delay(500);
+    if (otherBookmarkPlaced) {
+      FastLED.showColor(otherBookmarkColor, BRIGHTNESS_BLINK_OTHER_BOOKMARK);
+    } else {
+      FastLED.showColor(CRGB::Black, 0);
+    }
+    delay(500);
+  }
+
+  if (otherBookmarkPlaced) {
+    FastLED.showColor(otherBookmarkColor, BRIGHTNESS_OTHER_BOOKMARK);
+  } else {
+    FastLED.showColor(color, BRIGHTNESS_OWN_BOOKMARK);
+  }
+}
+
+void RGBOwnBookmarkRemoved() {
+  
+  for (int j = 0; j <= 3; j++) {
+    FastLED.showColor(ownBookmarkColor, BRIGHTNESS_BLINK_OWN_BOOKMARK);
+    delay(500);
+    if (otherBookmarkPlaced) {
+      FastLED.showColor(otherBookmarkColor, BRIGHTNESS_BLINK_OTHER_BOOKMARK);
+    } else {
+      FastLED.showColor(CRGB::Black, 0);
+    }
+    delay(500);
+  }
+
+  if (otherBookmarkPlaced) {
+    FastLED.showColor(otherBookmarkColor, BRIGHTNESS_OTHER_BOOKMARK);
+  } else {
+    FastLED.showColor(CRGB::Black, 0);
+  }
+}
+
+void RGBOtherBookmarkPlaced(String recievedColor) {
+
+  CRGB color;
+  if (recievedColor == "blue") {
+    color = CRGB::Blue;
+  } else if (recievedColor == "red") {
+    color = CRGB::Red;
+  }
+  otherBookmarkColor = color;
+
+  for (int j = 0; j <= 3; j++) {
+    FastLED.showColor(color, BRIGHTNESS_BLINK_OTHER_BOOKMARK);
+    delay(500);
+    if (ownBookmarkPlaced) {
+      FastLED.showColor(ownBookmarkColor, BRIGHTNESS_BLINK_OWN_BOOKMARK);
+    } else {
+      FastLED.showColor(CRGB::Black, 0);
+    }
+    delay(500);
+  }
+  
+  FastLED.showColor(otherBookmarkColor, BRIGHTNESS_OTHER_BOOKMARK);  
+}
+
+void RGBOtherBookmarkRemoved() {
+  
+  for (int j = 0; j <= 3; j++) {
+    FastLED.showColor(otherBookmarkColor, BRIGHTNESS_BLINK_OTHER_BOOKMARK);
+    delay(500);
+    if (ownBookmarkPlaced) {
+      FastLED.showColor(ownBookmarkColor, BRIGHTNESS_BLINK_OWN_BOOKMARK);
+    } else {
+      FastLED.showColor(CRGB::Black, 0);
+    }
+    delay(500);
+  }
+
+  if (ownBookmarkPlaced) {
+    FastLED.showColor(ownBookmarkColor, BRIGHTNESS_OWN_BOOKMARK);
+  } else {
+    FastLED.showColor(CRGB::Black, 0);
+  }
+}
 
 /*********************
  *  OTHER UTILITIES  *
@@ -254,7 +391,7 @@ void turn_off_led() {
 ///////////////////////////////////////////////////////////////
 
 void setup() {
-  led_blink(200, 300, 3);
+  // led_blink(200, 300, 3);
   
   /****************
    *  RFID SETUP  *
@@ -267,7 +404,7 @@ void setup() {
   mfrc522.PCD_DumpVersionToSerial();  // Show details of PCD - MFRC522 Card Reader details
   Serial.println(F("Scan PICC to see UID, SAK, type, and data blocks..."));
 
-  led_blink(2000, 300, 1);
+  // led_blink(2000, 300, 1);
 
   /****************
    *  WiFi SETUP  *
@@ -304,7 +441,12 @@ void setup() {
   server.begin();
   // you're connected now, so print out the status:
   on_wifi_connected();
-  
+
+  /****************
+   *  RGB LEDs SETUP  *
+   ****************/
+  FastLED.addLeds<WS2812, RGB_PIN, GRB>(leds, NUM_LEDS);
+  FastLED.showColor(CRGB::Black, 0);
 }
 
 
@@ -331,37 +473,41 @@ void loop() {
   cpid(&id);
 
   card_detected(id);
+  RGBOwnBookmarkPlaced(id);
   sendBookmarkOn(id);
+  Serial.print("Bookmark place complete \n");
 
   while (true){
     turn_on_led();
-    
     look_for_new_clients();
     
     control = 0;
     for (int i=0; i < 3; i++){
       if (!mfrc522.PICC_IsNewCardPresent()) {
         if(mfrc522.PICC_ReadCardSerial()) {
-          // Serial.print("a");
+          //Serial.print("a");
           control |= 0x16;
         }
         if(mfrc522.PICC_ReadCardSerial()) {
-          // Serial.print("b");
+          //Serial.print("b");
           control |= 0x16;
         }
-        // Serial.print("c");
+        //Serial.print("c");
         control += 0x1;
       }
-      // Serial.print("d");
+      //Serial.print("d");
       control += 0x4;
     }
     if (control == 13 || control == 14){
       //card is still there
     }
     else {
+      Serial.print("Break loop \n");
       break;
     }
   }
   turn_off_led();
+  RGBOwnBookmarkRemoved();
+  sendBookmarkOff(id);
   card_removed();
 }
