@@ -6,25 +6,15 @@
 #include <FastLED.h>
 
 
+#define LED_PIN         10        // Red cable, it is a digital pin but it is also power for the led, so: red.
+const int ledPin =  LED_PIN;// the number of the LED pin
+
 /**************************
  *  RFID INITIALIZATIONS  *
  **************************/
  
 #define RST_PIN         4         // White wire
 #define SS_PIN          5         // Green cable, as every digital-signal wire
-#define LED_PIN         10        // Red cable, it is a digital pin but it is also power for the led, so: red.
-
-#define RGB_PIN     8
-#define NUM_LEDS    18
-CRGB leds[NUM_LEDS];
-
-#define BRIGHTNESS_OWN_BOOKMARK    10
-#define BRIGHTNESS_OTHER_BOOKMARK    100
-#define BRIGHTNESS_BLINK_OWN_BOOKMARK    127
-#define BRIGHTNESS_BLINK_OTHER_BOOKMARK    200
-
-
-const int ledPin =  LED_PIN;// the number of the LED pin
 
 MFRC522 mfrc522(SS_PIN, RST_PIN);  // Create MFRC522 instance
 
@@ -35,52 +25,20 @@ MFRC522::Uid id2;
 String cardBlue = "0x17 0x2f 0x5b 0x52 ";
 String cardRed = "0x67 0x29 0x62 0x52 ";
 
-bool ownBookmarkPlaced = false;
-bool otherBookmarkPlaced = false;
-CRGB ownBookmarkColor;
-CRGB otherBookmarkColor;
 
-DynamicJsonDocument response(1024);
+/**************************
+ *  RGB INITIALIZATIONS  *
+ **************************/
 
-uint8_t control = 0x00;
+#define RGB_PIN     8
+#define NUM_LEDS    18
+CRGB leds[NUM_LEDS];
 
-String stringHex(uint8_t *data, uint8_t lenght){
-  char tmp[16];
-  String temp;
-  for (int i = 0; i < lenght; i++){
-    sprintf(tmp, "0x%.2x", data[i]);
-    temp = temp + tmp + " ";
-  }
-  return temp;
-}
-
-void printHex(uint8_t *data, uint8_t lenght){
-  Serial.print(stringHex(data, lenght));
-}
-
-void cpid(MFRC522::Uid *id) {
-  memset(id, 0, sizeof(MFRC522::Uid));
-  memcpy(id->uidByte, mfrc522.uid.uidByte, mfrc522.uid.size);
-  id->size = mfrc522.uid.size;
-  id->sak = mfrc522.uid.sak;
-}
-
-void card_detected(MFRC522::Uid id) {  
-  Serial.print("New card: ");
-  printHex(id.uidByte, id.size);
-  Serial.println("");
-  ownBookmarkPlaced = true;
-}
-
-void card_removed() {
-  Serial.println("Card Removed.");
-  ownBookmarkPlaced = false;
-  delay(1000);
-
-  mfrc522.PICC_HaltA();
-  mfrc522.PCD_StopCrypto1();
-}
-
+// Brightness settings
+#define BRIGHTNESS_OWN_BOOKMARK    10
+#define BRIGHTNESS_OTHER_BOOKMARK    100
+#define BRIGHTNESS_BLINK_OWN_BOOKMARK    127
+#define BRIGHTNESS_BLINK_OTHER_BOOKMARK    200
 
 /*************************
  *  WiFi INITIALIZATION  *
@@ -104,10 +62,70 @@ WiFiClient wifi;
 HttpClient client1 = HttpClient(wifi, Arduino2, 80);
 HttpClient client2 = HttpClient(wifi, Arduino1, 80);
 
-String requestID1 = "{\"bookmark\":\"on\",\"color\":\"red\"}";
-String requestID2 = "{\"bookmark\":\"on\",\"color\":\"blue\"}";
-
 int status = WL_IDLE_STATUS;
+
+/**************************
+ *  OTHER INITIALIZATIONS  *
+ **************************/
+
+// Variables for keeping track of bookmarks placed
+bool ownBookmarkPlaced = false;
+bool otherBookmarkPlaced = false;
+CRGB ownBookmarkColor;
+CRGB otherBookmarkColor;
+
+DynamicJsonDocument response(1024);
+
+uint8_t control = 0x00;
+
+/**************************
+ *  BOOKMARK HANDLING  *
+ **************************/
+
+// Function for converting hex to string
+String stringHex(uint8_t *data, uint8_t lenght){
+  char tmp[16];
+  String temp;
+  for (int i = 0; i < lenght; i++){
+    sprintf(tmp, "0x%.2x", data[i]);
+    temp = temp + tmp + " ";
+  }
+  return temp;
+}
+
+// Function for printing hex to terminal
+void printHex(uint8_t *data, uint8_t lenght){
+  Serial.print(stringHex(data, lenght));
+}
+
+void cpid(MFRC522::Uid *id) {
+  memset(id, 0, sizeof(MFRC522::Uid));
+  memcpy(id->uidByte, mfrc522.uid.uidByte, mfrc522.uid.size);
+  id->size = mfrc522.uid.size;
+  id->sak = mfrc522.uid.sak;
+}
+
+// Function called when card is detected
+void card_detected(MFRC522::Uid id) {  
+  Serial.print("New card: ");
+  printHex(id.uidByte, id.size);
+  Serial.println("");
+  ownBookmarkPlaced = true;
+}
+
+// Function called when card is removed
+void card_removed() {
+  Serial.println("Card Removed.");
+  ownBookmarkPlaced = false;
+  delay(1000);
+
+  mfrc522.PICC_HaltA();
+  mfrc522.PCD_StopCrypto1();
+}
+
+/*************************
+ *  WiFi FUNCTIONS  *
+ *************************/
 
 void printWifiStatus() {
   // print the SSID of the network you're attached to:
@@ -126,6 +144,7 @@ void printWifiStatus() {
   Serial.println(" dBm");
 }
 
+// Function called regularly to check for incomming messages from the other cube 
 void look_for_new_clients() {
   // listen for incoming clients
   WiFiClient client = server.available();
@@ -136,33 +155,35 @@ void look_for_new_clients() {
     while (client.connected()) {
       if (client.available()) {
 
-        // Here we read all the http request, char by char.
+        // Read all the http request, char by char, and print.
+        // I think this just reads the head of it though?
         int c = client.read();
         Serial.write(c);
         
-        // if you've gotten to the end of the line (received a newline
-        // character) and the line is blank, the http request has ended,
-        // so you can send a reply
+        // end of line + line is blank means end of http request
         if (c == '\n' && currentLineIsBlank) {
+          // This is where we read the content of the http request
           String msg;
           while(client.available()) {
-            c = client.read();
+            c = client.read(); // read char by char
             Serial.write(c);
-            msg = String(msg + (char) c);
+            msg = String(msg + (char) c); // add to string
           }
+
+          // Convert to JSON
           deserializeJson(response, msg);
           JsonObject JSONmsg = response.as<JsonObject>();
-          
-          if (JSONmsg["bookmark"] == "on") {
+
+          // Check if bookmark was placed or removed
+          if (JSONmsg["bookmark"] == "placed") {
             otherBookmarkPlaced = true;
             RGBOtherBookmarkPlaced(JSONmsg["color"]);
-          } else if(JSONmsg["bookmark"] == "off") {
+          } else if(JSONmsg["bookmark"] == "removed") {
             otherBookmarkPlaced = false;
             RGBOtherBookmarkRemoved();
           }
   
           send_standard_reply(client);
-          led_blink(800, 200, 2);
           break;
         }
         if (c == '\n') {
@@ -183,6 +204,10 @@ void look_for_new_clients() {
   }
 }
 
+// Function for sending reply to http request
+// TODO: This is a very long reply, what do we actually need to send in a reply?
+// Guess it doesn't matter too much do, it still works, the content of the reply 
+// is not that important
 void send_standard_reply(WiFiClient client){
   Serial.println("Reply");
   // send a standard http response header
@@ -205,55 +230,45 @@ void send_standard_reply(WiFiClient client){
   client.println("</html>");
 }
 
-void on_wifi_connected() {
-  printWifiStatus();
-  //led_blink(1000, 500, 3);
-}
-
-void connectSample(){
-  led_blink(100,100, 10);
-  if (wifi.connect(Arduino1, 80)) {
-    Serial.println("connected to server");
-    // Make a HTTP request:
-    wifi.println("GET /search?q=arduino HTTP/1.1");
-    wifi.println("Host: www.google.com");
-    wifi.println("Connection: close");
-    wifi.println();
-  }
-  led_blink(200,100, 10);
-}
-
-void sendBookmarkOn(MFRC522::Uid id){
+// Function called before sending http request with bookmark placed data
+void sendBookmarkPlaced(MFRC522::Uid id){
   String postData;
 
+  // Determine color of bookmark
   if (stringHex(id.uidByte, id.size) == cardBlue) {
-    postData = "{\"bookmark\":\"on\",\"color\":\"blue\"}";
+    postData = "{\"bookmark\":\"placed\",\"color\":\"blue\"}";
   } else if (stringHex(id.uidByte, id.size) == cardRed) {
-    postData = "{\"bookmark\":\"on\",\"color\":\"red\"}";
+    postData = "{\"bookmark\":\"placed\",\"color\":\"red\"}";
   }
 
   makePOSTRequest(postData);
 }
 
-void sendBookmarkOff(MFRC522::Uid id){
+// Function called before sending http request with bookmark removed data
+void sendBookmarkRemoved(MFRC522::Uid id){
   String postData;
 
+  // Determine color of bookmark
   if (stringHex(id.uidByte, id.size) == cardBlue) {
-    postData = "{\"bookmark\":\"off\",\"color\":\"blue\"}";
+    postData = "{\"bookmark\":\"removed\",\"color\":\"blue\"}";
   } else if (stringHex(id.uidByte, id.size) == cardRed) {
-    postData = "{\"bookmark\":\"off\",\"color\":\"red\"}";
+    postData = "{\"bookmark\":\"removed\",\"color\":\"red\"}";
   }
 
   makePOSTRequest(postData);
 }
 
+// Function for making an http request. Data to be sent has been determined in 
+// previous functions
 void makePOSTRequest(String postData) {
   Serial.println("making POST request");
   String contentType = "application/json";
 
   int statusCode;
   String response;
-  
+
+  // IP addresses are pretty hard coded, so depending on which arduino it is
+  // sent from, it will just send it to the IP address of the other Arduino
   if (WiFi.localIP() == Arduino2) {
     client2.post("/", contentType, postData);
     statusCode = client2.responseStatusCode();
@@ -277,17 +292,20 @@ void makePOSTRequest(String postData) {
 void RGBOwnBookmarkPlaced(MFRC522::Uid id) {
 
   CRGB color;
+
+  // Determine color
   if (stringHex(id.uidByte, id.size) == cardBlue) {
     color = CRGB::Blue;
   } else if (stringHex(id.uidByte, id.size) == cardRed) {
     color = CRGB::Red;
   }
-  ownBookmarkColor = color;
-  
+  ownBookmarkColor = color; // Save color for later blinking :)
+
+  // Loop for doing the initial blinking 
   for (int j = 0; j <= 3; j++) {
     FastLED.showColor(color, BRIGHTNESS_BLINK_OWN_BOOKMARK);
     delay(500);
-    if (otherBookmarkPlaced) {
+    if (otherBookmarkPlaced) { // Base the blinking color on how many bookmarks are placed
       FastLED.showColor(otherBookmarkColor, BRIGHTNESS_BLINK_OTHER_BOOKMARK);
     } else {
       FastLED.showColor(CRGB::Black, 0);
@@ -295,7 +313,7 @@ void RGBOwnBookmarkPlaced(MFRC522::Uid id) {
     delay(500);
   }
 
-  if (otherBookmarkPlaced) {
+  if (otherBookmarkPlaced) { // Prioritise other bookmark color over own bookmark color
     FastLED.showColor(otherBookmarkColor, BRIGHTNESS_OTHER_BOOKMARK);
   } else {
     FastLED.showColor(color, BRIGHTNESS_OWN_BOOKMARK);
@@ -303,11 +321,12 @@ void RGBOwnBookmarkPlaced(MFRC522::Uid id) {
 }
 
 void RGBOwnBookmarkRemoved() {
-  
+
+  // Loop for doing the initial blinking 
   for (int j = 0; j <= 3; j++) {
     FastLED.showColor(ownBookmarkColor, BRIGHTNESS_BLINK_OWN_BOOKMARK);
     delay(500);
-    if (otherBookmarkPlaced) {
+    if (otherBookmarkPlaced) { // Base the blinking color on how many bookmarks are placed
       FastLED.showColor(otherBookmarkColor, BRIGHTNESS_BLINK_OTHER_BOOKMARK);
     } else {
       FastLED.showColor(CRGB::Black, 0);
@@ -315,7 +334,7 @@ void RGBOwnBookmarkRemoved() {
     delay(500);
   }
 
-  if (otherBookmarkPlaced) {
+  if (otherBookmarkPlaced) { // Prioritise other bookmark color over no color
     FastLED.showColor(otherBookmarkColor, BRIGHTNESS_OTHER_BOOKMARK);
   } else {
     FastLED.showColor(CRGB::Black, 0);
@@ -325,6 +344,8 @@ void RGBOwnBookmarkRemoved() {
 void RGBOtherBookmarkPlaced(String recievedColor) {
 
   CRGB color;
+
+  // Determine color
   if (recievedColor == "blue") {
     color = CRGB::Blue;
   } else if (recievedColor == "red") {
@@ -332,26 +353,29 @@ void RGBOtherBookmarkPlaced(String recievedColor) {
   }
   otherBookmarkColor = color;
 
+  // Loop for doing the initial blinking 
   for (int j = 0; j <= 3; j++) {
     FastLED.showColor(color, BRIGHTNESS_BLINK_OTHER_BOOKMARK);
     delay(500);
-    if (ownBookmarkPlaced) {
+    if (ownBookmarkPlaced) { // Base the blinking color on how many bookmarks are placed
       FastLED.showColor(ownBookmarkColor, BRIGHTNESS_BLINK_OWN_BOOKMARK);
     } else {
       FastLED.showColor(CRGB::Black, 0);
     }
     delay(500);
   }
-  
+
+  // Always show other bookmark color if that is placed
   FastLED.showColor(otherBookmarkColor, BRIGHTNESS_OTHER_BOOKMARK);  
 }
 
 void RGBOtherBookmarkRemoved() {
-  
+
+  // Loop for doing the initial blinking 
   for (int j = 0; j <= 3; j++) {
     FastLED.showColor(otherBookmarkColor, BRIGHTNESS_BLINK_OTHER_BOOKMARK);
     delay(500);
-    if (ownBookmarkPlaced) {
+    if (ownBookmarkPlaced) { // Base the blinking color on how many bookmarks are placed
       FastLED.showColor(ownBookmarkColor, BRIGHTNESS_BLINK_OWN_BOOKMARK);
     } else {
       FastLED.showColor(CRGB::Black, 0);
@@ -359,7 +383,7 @@ void RGBOtherBookmarkRemoved() {
     delay(500);
   }
 
-  if (ownBookmarkPlaced) {
+  if (ownBookmarkPlaced) { // Prioritise own bookmark color over no color
     FastLED.showColor(ownBookmarkColor, BRIGHTNESS_OWN_BOOKMARK);
   } else {
     FastLED.showColor(CRGB::Black, 0);
@@ -440,7 +464,7 @@ void setup() {
   }
   server.begin();
   // you're connected now, so print out the status:
-  on_wifi_connected();
+  printWifiStatus();
 
   /****************
    *  RGB LEDs SETUP  *
@@ -474,7 +498,7 @@ void loop() {
 
   card_detected(id);
   RGBOwnBookmarkPlaced(id);
-  sendBookmarkOn(id);
+  sendBookmarkPlaced(id);
   Serial.print("Bookmark place complete \n");
 
   while (true){
@@ -508,6 +532,6 @@ void loop() {
   }
   turn_off_led();
   RGBOwnBookmarkRemoved();
-  sendBookmarkOff(id);
+  sendBookmarkRemoved(id);
   card_removed();
 }
